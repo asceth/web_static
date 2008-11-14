@@ -1,0 +1,3 @@
+web_static is an example otp application that uses all the other web_* applications.
+
+web_static depends upon mochiweb as well as most of the other web_*
