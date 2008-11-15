@@ -8,5 +8,5 @@
               web_static]},
    {registered, [web_static_sup]},
    {applications, [kernel, stdlib, mochiweb, web_pages, web_layout]},
-   {mod, {web_gamesyn_app, []}},
+   {mod, {web_static_app, []}},
    {start_phases, []}]}.
