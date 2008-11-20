@@ -50,7 +50,14 @@ start(_Type, _StartArgs) ->
                 AnyWebRouter ->
                   AnyWebRouter
               end,
-  case web_static_sup:start_link([Ip, Port, DocRoot, WebRouter]) of
+  Domain = case os:getenv("STATIC_DOMAIN") of
+             false ->
+               "localhost";
+             AnyDomain ->
+               AnyDomain
+           end,
+
+  case web_static_sup:start_link([Ip, Port, Domain, DocRoot, WebRouter]) of
     {ok, Pid} ->
       {ok, Pid};
     Error ->

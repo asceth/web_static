@@ -24,8 +24,8 @@
 %% Function: start_link() -> {ok,Pid} | ignore | {error,Error}
 %% Description: Starts the supervisor
 %%--------------------------------------------------------------------
-start_link([Ip, Port, DocRoot, WebRouter]) ->
-  supervisor:start_link({local, ?SERVER}, ?MODULE, [Ip, Port, DocRoot, WebRouter]).
+start_link([Ip, Port, Domain, DocRoot, WebRouter]) ->
+  supervisor:start_link({local, ?SERVER}, ?MODULE, [Ip, Port, Domain, DocRoot, WebRouter]).
 
 
 %%====================================================================
@@ -40,7 +40,7 @@ start_link([Ip, Port, DocRoot, WebRouter]) ->
 %% to find out about restart strategy, maximum restart frequency and child
 %% specifications.
 %%--------------------------------------------------------------------
-init([Ip, Port, DocRoot, WebRouter]) ->
+init([Ip, Port, Domain, DocRoot, WebRouter]) ->
   RestartStrategy = one_for_one,
   MaxRestarts = 10,
   MaxSecondsBetweenRestarts = 5,
@@ -60,7 +60,7 @@ init([Ip, Port, DocRoot, WebRouter]) ->
   WebStaticRouter = {web_static_router, {web_router, start_link, [WebRouter]},
                       Restart, Shutdown, Type, [web_router]},
 
-  WebSessions = {web_sessions, {web_sessions, start_link, [WebRouter]},
+  WebSessions = {web_sessions, {web_sessions, start_link, [WebRouter, Domain]},
                  Restart, Shutdown, Type, [web_sessions]},
 
   WebStatic = {web_static, {web_static, start_link, [WebConfig]},
