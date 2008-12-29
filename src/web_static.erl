@@ -207,101 +207,109 @@ get_option(Option, Options) ->
 
 
 do_request(WebRouter, Method, PathTokens, Req) ->
-  Request = hook_pre_request(WebRouter, Method, PathTokens, {Req}),
-  hook_post_request(WebRouter, Method, PathTokens, Request).
+  Session = hook_pre_request(WebRouter, Method, PathTokens, Req),
+  SessionFinal = hook_post_request(WebRouter, Session),
+  {status, SessionFinal:flash_lookup("status"), headers, SessionFinal:flash_lookup("headers"), body, SessionFinal:flash_lookup("body")}.
 
+hook_pre_request(WebRouter, Method, PathTokens, Req) ->
+  [Session] = web_router:run(WebRouter, pre_request, global,
+                             [[{"method", Method}, {"path_tokens", PathTokens}, {"request", Req}]]),
 
-hook_pre_request(WebRouter, Method, PathTokens, {Req}) ->
-  [{request, Req1, session, Session}] = web_router:run(WebRouter, pre_request, global, [Method, PathTokens, Req]),
-
-  case web_router:run(WebRouter, pre_request, PathTokens, [Method, PathTokens, Req, Session]) of
+  case web_router:run(WebRouter, pre_request, PathTokens, [Session]) of
     [{error, Error, session, Session1}] ->
-      do_error(WebRouter, Method, PathTokens, pre_request, Error, Req1, Session1);
+      do_error(WebRouter, pre_request, Error, Session1);
     [{redirect, Url, session, Session1}] ->
-      {request, Req1, session, Session1, status, 301, headers, [{"Location", Url}], body, <<>>};
+      Session1:flash_merge_now([{"status", 301}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
     [{redirect, StatusCode, Url, session, Session1}] ->
-      {request, Req1, session, Session1, status, StatusCode, headers, [{"Location", Url}], body, <<>>};
-    [{ok, session, Session1}] ->
-      hook_request_global(WebRouter, Method, PathTokens, {Req1, Session1});
+      Session1:flash_merge_now([{"status", StatusCode}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
+    [{ok, Session1}] ->
+      hook_request_global(WebRouter, Session1);
     [] ->
-      hook_request_global(WebRouter, Method, PathTokens, {Req1, Session})
+      hook_request_global(WebRouter, Session)
   end.
 
-hook_request_global(WebRouter, Method, PathTokens, {Req, Session}) ->
-  case web_router:run(WebRouter, request, global, [Method, PathTokens, Req, Session]) of
+hook_request_global(WebRouter, Session) ->
+  case web_router:run(WebRouter, request, global, [Session]) of
     [] ->
-      hook_request_path(WebRouter, Method, PathTokens, {Req, Session, []});
+      hook_request_path(WebRouter, Session);
     [{error, Error, session, Session1}] ->
-      do_error(WebRouter, Method, PathTokens, request, Error, Req, Session1);
+      do_error(WebRouter, request, Error, Session1);
     [{redirect, Url, session, Session1}] ->
-      {request, Req, session, Session1, status, 301, headers, [{"Location", Url}], body, <<>>};
+      Session1:flash_merge_now([{"status", 301}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
     [{redirect, StatusCode, Url, session, Session1}] ->
-      {request, Req, session, Session1, status, StatusCode, headers, [{"Location", Url}], body, <<>>};
-    [{request, Req1, session, Session1, headers, Headers}] ->
-      hook_request_path(WebRouter, Method, PathTokens, {Req1, Session1, Headers})
+      Session1:flash_merge_now([{"status", StatusCode}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
+    [Session1] ->
+      hook_request_path(WebRouter, Session1)
   end.
 
-hook_request_path(WebRouter, Method, PathTokens, {Req, Session, Headers}) ->
-  case web_router:run(WebRouter, request, PathTokens, [Method, PathTokens, Req, Session]) of
+hook_request_path(WebRouter, Session) ->
+  case web_router:run(WebRouter, request, Session:flash_lookup("path_tokens"), [Session]) of
     [] ->
-      do_status(WebRouter, Method, PathTokens, request, 403, Req, Session);
+      do_status(WebRouter, request, 403, Session);
     [{error, Error, session, Session1}] ->
-      do_error(WebRouter, Method, PathTokens, request, Error, Req, Session1);
+      do_error(WebRouter, request, Error, Session1);
     [{redirect, Url, session, Session1}] ->
-      {request, Req, session, Session1, status, 301, headers, [{"Location", Url}], body, <<>>};
+      Session1:flash_merge_now([{"status", 301}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
     [{redirect, StatusCode, Url, session, Session1}] ->
-      {request, Req, session, Session1, status, StatusCode, headers, [{"Location", Url}], body, <<>>};
-    [{request, Req1, session, Session1, status, Status, headers, Headers1}] ->
-      hook_views(WebRouter, Method, PathTokens, {Req1, Session1, Status, Headers ++ Headers1});
-    [{request, Req1, session, Session1, status, Status, headers, Headers1, view_tokens, ViewTokens}] ->
-      hook_views(WebRouter, Method, ViewTokens, {Req1, Session1, Status, Headers ++ Headers1})
+      Session1:flash_merge_now([{"status", StatusCode}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
+    [{session, Session1, view_tokens, ViewTokens}] ->
+      Session2 = Session1:flash_merge_now([{"view_tokens", ViewTokens}]),
+      hook_views(WebRouter, Session2);
+    [Session1] ->
+      Session2 = Session1:flash_merge_now([{"view_tokens", Session1:flash_lookup("path_tokens")}]),
+      hook_views(WebRouter, Session2)
+
+
   end.
 
-hook_views(WebRouter, Method, PathTokens, {Req, Session, Status, Headers}) ->
-  Body0 = web_router:run(WebRouter, pre_request_view, global, [{Method, PathTokens, Req, Session, Status}]),
-  Body1 = web_router:run(WebRouter, pre_request_view, PathTokens, [{Method, PathTokens, Req, Session, Status}]),
+hook_views(WebRouter, Session) ->
+  ViewTokens = Session:flash_lookup("view_tokens"),
 
-  Body2 = web_router:run(WebRouter, request_view, global, [{Method, PathTokens, Req, Session, Status}]),
-  Body3 = web_router:run(WebRouter, request_view, PathTokens, [{Method, PathTokens, Req, Session, Status}]),
+  Body0 = web_router:run(WebRouter, pre_request_view, global, [Session]),
+  Body1 = web_router:run(WebRouter, pre_request_view, ViewTokens, [Session]),
 
-  Body4 = web_router:run(WebRouter, post_request_view, PathTokens, [{Method, PathTokens, Req, Session, Status}]),
-  Body5 = web_router:run(WebRouter, post_request_view, global, [{Method, PathTokens, Req, Session, Status}]),
+  Body2 = web_router:run(WebRouter, request_view, global, [Session]),
+  Body3 = web_router:run(WebRouter, request_view, ViewTokens, [Session]),
+
+  Body4 = web_router:run(WebRouter, post_request_view, ViewTokens, [Session]),
+  Body5 = web_router:run(WebRouter, post_request_view, global, [Session]),
 
   BodyFinal = [Body0, Body1, Body2, Body3, Body4, Body5],
-  {request, Req, session, Session, status, Status, headers, Headers, body, BodyFinal}.
+  Session:flash_merge_now([{"body", BodyFinal}]).
 
-hook_post_request(WebRouter, Method, PathTokens, {request, Req, session, Session, status, Status, headers, Headers, body, Body}) ->
-  Response = case web_router:run(WebRouter, post_request, global, [Method, PathTokens, Req, Session, Status, Headers, Body]) of
+hook_post_request(WebRouter, Session) ->
+  Session1 = case web_router:run(WebRouter, post_request, global, [Session]) of
                [] ->
-                 {status, Status, headers, Headers, body, Body};
+                 Session;
                [Response1] ->
                  Response1
              end,
-  {status, Status1, headers, Headers1, body, Body1} = Response,
-  case web_router:run(WebRouter, post_request, PathTokens, [Method, PathTokens, Req, Session, Status1, Headers1, Body1]) of
+  case web_router:run(WebRouter, post_request, Session:flash_lookup("path_tokens"), [Session]) of
     [] ->
-      Response;
+      Session1;
     [Response2] ->
       Response2
   end.
 
-do_error(WebRouter, Method, PathTokens, Hook, Error, Req, Session) ->
-  ?ERROR_MSG("~p~nRequest: ~p~nHook: ~p~nError: ~p~n~n", [httpd_util:rfc1123_date(erlang:universaltime()), Req, Hook, Error]),
-  case web_router:run(WebRouter, request_error, 500, [Method, PathTokens, Req, Error]) of
+do_error(WebRouter, Hook, Error, Session) ->
+  ?ERROR_MSG("~p~nRequest: ~p~nHook: ~p~nError: ~p~n~n", [httpd_util:rfc1123_date(erlang:universaltime()),
+                                                          Session:flash_lookup("request"), Hook, Error]),
+  case web_router:run(WebRouter, request_error, 500, [Session, Error]) of
     [] ->
-      {request, Req, session, Session, status, 500, headers, [], body, <<"500">>};
+      Session:flash_merge_now([{"status", 500}, {"headers", []}, {"body", <<"500">>}]);
     [Response] ->
       {status, Status, headers, Headers, body, Body} = Response,
-      {request, Req, session, Session, status, Status, headers, Headers, body, Body}
+      Session:flash_merge_now([{"status", Status}, {"headers", Headers}, {"body", Body}])
   end.
 
-do_status(WebRouter, Method, PathTokens, Hook, Status, Req, Session) ->
-  ?WARNING_MSG("~p~nRequest: ~p~nHook: ~p~nStatus: ~p~n~n", [httpd_util:rfc1123_date(erlang:universaltime()), Req, Hook, Status]),
-  case web_router:run(WebRouter, request_error, Status, [Method, PathTokens, Req, Session]) of
+do_status(WebRouter, Hook, Status, Session) ->
+  ?WARNING_MSG("~p~nRequest: ~p~nHook: ~p~nStatus: ~p~n~n", [httpd_util:rfc1123_date(erlang:universaltime()),
+                                                             Session:flash_lookup("request"), Hook, Status]),
+  case web_router:run(WebRouter, request_error, Status, [Session]) of
     [] ->
-      {request, Req, session, Session, status, Status, headers, [], body, list_to_binary(integer_to_list(Status))};
+      Session:flash_merge_now([{"status", Status}, {"headers", []}, {"body", list_to_binary(integer_to_list(Status))}]);
     [Response] ->
       {status, Status1, headers, Headers, body, Body} = Response,
-      {request, Req, session, Session, status, Status1, headers, Headers, body, Body}
+      Session:flash_merge_now([{"status", Status1}, {"headers", Headers}, {"body", Body}])
   end.
 
