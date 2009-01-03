@@ -1,0 +1,9 @@
+!!!
+%html
+  %head
+    %title
+      Web Static
+  %body
+    #content
+      @web_layout:yield
+

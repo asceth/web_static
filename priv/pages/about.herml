@@ -1,0 +1,8 @@
+%h3
+  About WebStatic
+%p
+  %strong
+    Purpose
+  Web Static is an example application using web_router, web_layout, web_sessions and web_pages to construct a request cycle.
+
+
