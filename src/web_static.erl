@@ -93,6 +93,7 @@ loop(WebRouter, Req, _DocRoot) ->
                                                       500, [RouteMethod, PathTokens, Req, []]),
                      ErrorResponse
                  end,
+      ?INFO_MSG("--- RESPONSE --- ~n~p~n~n", [Response]),
       {_, Time1} = statistics(wall_clock),
       U1 = Time1 / 1000,
       ReqsASec = case U1 of
@@ -135,9 +136,8 @@ init([Options]) ->
   {DocRoot, Options1} = get_option(docroot, Options),
   {WebRouter, Options2} = get_option(web_router, Options1),
 
-  web_pages:load_pages(static_pages, WebRouter, code:priv_dir(?SERVER) ++ "/pages"),
-  web_layout:register_header(static_layout, WebRouter, code:priv_dir(?SERVER) ++ "/layout/header.haml"),
-  web_layout:register_footer(static_layout, WebRouter, code:priv_dir(?SERVER) ++ "/layout/footer.haml"),
+  web_pages:load_pages(WebRouter, code:priv_dir(?SERVER) ++ "/pages"),
+  web_layout:register_layout(default, WebRouter, code:priv_dir(?SERVER) ++ "/layout/static.herml"),
 
   {A1, A2, A3} = now(),
   random:seed(A1, A2, A3),
@@ -208,7 +208,9 @@ get_option(Option, Options) ->
 
 do_request(WebRouter, Method, PathTokens, Req) ->
   Session = hook_pre_request(WebRouter, Method, PathTokens, Req),
+  ?INFO_MSG("pre reqest ~n~p~n~n", [Session]),
   SessionFinal = hook_post_request(WebRouter, Session),
+  ?INFO_MSG("post reqest ~n~p~n~n", [SessionFinal]),
   {status, SessionFinal:flash_lookup("status"), headers, SessionFinal:flash_lookup("headers"), body, SessionFinal:flash_lookup("body")}.
 
 hook_pre_request(WebRouter, Method, PathTokens, Req) ->
@@ -258,8 +260,6 @@ hook_request_path(WebRouter, Session) ->
     [Session1] ->
       Session2 = Session1:flash_merge_now([{"view_tokens", Session1:flash_lookup("path_tokens")}]),
       hook_views(WebRouter, Session2)
-
-
   end.
 
 hook_views(WebRouter, Session) ->
@@ -274,8 +274,11 @@ hook_views(WebRouter, Session) ->
   Body4 = web_router:run(WebRouter, post_request_view, ViewTokens, [Session]),
   Body5 = web_router:run(WebRouter, post_request_view, global, [Session]),
 
-  BodyFinal = [Body0, Body1, Body2, Body3, Body4, Body5],
-  Session:flash_merge_now([{"body", BodyFinal}]).
+  RenderedBody = [Body0, Body1, Body2, Body3, Body4, Body5],
+  Session1 = Session:flash_merge_now([{"YieldedContent", RenderedBody}]),
+  BodyFinal = web_router:run(WebRouter, request_layout_view, global, [Session]),
+
+  Session1:flash_merge_now([{"body", BodyFinal}]).
 
 hook_post_request(WebRouter, Session) ->
   Session1 = case web_router:run(WebRouter, post_request, global, [Session]) of
