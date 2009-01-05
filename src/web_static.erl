@@ -79,21 +79,20 @@ loop(WebRouter, Req, _DocRoot) ->
     RouteMethod ->
       Response = try do_request(WebRouter, Method, PathTokens, Req)
                  catch
-                     throw:{route_error, StatusCode, Data} ->
+                   throw:{route_error, StatusCode, Data} ->
                      [RouteErrorResponse] = web_router:run(WebRouter, request_error,
-                                               StatusCode, [RouteMethod, PathTokens, Req, Data]),
+                                                           StatusCode, [RouteMethod, PathTokens, Req, Data]),
                      RouteErrorResponse;
-                     error:function_clause ->
+                   error:function_clause ->
                      [FunctionClauseResponse] = web_router:run(WebRouter, request_error,
-                                                             403, [RouteMethod, PathTokens, Req, []]),
+                                                               403, [RouteMethod, PathTokens, Req, []]),
                      FunctionClauseResponse;
-                     error:Error ->
+                   error:Error ->
                      ?ERROR_MSG("~p~nError: ~p~nTrace: ~p~n~n", [httpd_util:rfc1123_date(erlang:universaltime()), Error, erlang:get_stacktrace()]),
                      [ErrorResponse] = web_router:run(WebRouter, request_error,
                                                       500, [RouteMethod, PathTokens, Req, []]),
                      ErrorResponse
                  end,
-      ?INFO_MSG("--- RESPONSE --- ~n~p~n~n", [Response]),
       {_, Time1} = statistics(wall_clock),
       U1 = Time1 / 1000,
       ReqsASec = case U1 of
@@ -208,9 +207,7 @@ get_option(Option, Options) ->
 
 do_request(WebRouter, Method, PathTokens, Req) ->
   Session = hook_pre_request(WebRouter, Method, PathTokens, Req),
-  ?INFO_MSG("pre reqest ~n~p~n~n", [Session]),
   SessionFinal = hook_post_request(WebRouter, Session),
-  ?INFO_MSG("post reqest ~n~p~n~n", [SessionFinal]),
   {status, SessionFinal:flash_lookup("status"), headers, SessionFinal:flash_lookup("headers"), body, SessionFinal:flash_lookup("body")}.
 
 hook_pre_request(WebRouter, Method, PathTokens, Req) ->
@@ -276,8 +273,12 @@ hook_views(WebRouter, Session) ->
 
   RenderedBody = [Body0, Body1, Body2, Body3, Body4, Body5],
   Session1 = Session:flash_merge_now([{"YieldedContent", RenderedBody}]),
-  BodyFinal = web_router:run(WebRouter, request_layout_view, global, [Session]),
-
+  BodyFinal = case web_router:run(WebRouter, request_layout_view, global, [Session1]) of
+                [] ->
+                  RenderedBody;
+                BodyWithLayout ->
+                  BodyWithLayout
+              end,
   Session1:flash_merge_now([{"body", BodyFinal}]).
 
 hook_post_request(WebRouter, Session) ->
