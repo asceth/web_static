@@ -4,6 +4,5 @@
     %title
       Web Static
   %body
-    #content
-      @web_layout:yield
+    @web_session:flash_lookup_s(@Session, "YieldedContent")
 

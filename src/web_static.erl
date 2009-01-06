@@ -208,7 +208,7 @@ get_option(Option, Options) ->
 do_request(WebRouter, Method, PathTokens, Req) ->
   Session = hook_pre_request(WebRouter, Method, PathTokens, Req),
   SessionFinal = hook_post_request(WebRouter, Session),
-  {status, SessionFinal:flash_lookup("status"), headers, SessionFinal:flash_lookup("headers"), body, SessionFinal:flash_lookup("body")}.
+  {status, web_session:flash_lookup(SessionFinal, "status"), headers, web_session:flash_lookup(SessionFinal, "headers"), body, web_session:flash_lookup(SessionFinal, "body")}.
 
 hook_pre_request(WebRouter, Method, PathTokens, Req) ->
   [Session] = web_router:run(WebRouter, pre_request, global,
@@ -218,9 +218,9 @@ hook_pre_request(WebRouter, Method, PathTokens, Req) ->
     [{error, Error, session, Session1}] ->
       do_error(WebRouter, pre_request, Error, Session1);
     [{redirect, Url, session, Session1}] ->
-      Session1:flash_merge_now([{"status", 301}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
+      web_session:flash_merge_now(Session1, [{"status", 301}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
     [{redirect, StatusCode, Url, session, Session1}] ->
-      Session1:flash_merge_now([{"status", StatusCode}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
+      web_session:flash_merge_now(Session1, [{"status", StatusCode}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
     [{ok, Session1}] ->
       hook_request_global(WebRouter, Session1);
     [] ->
@@ -234,33 +234,33 @@ hook_request_global(WebRouter, Session) ->
     [{error, Error, session, Session1}] ->
       do_error(WebRouter, request, Error, Session1);
     [{redirect, Url, session, Session1}] ->
-      Session1:flash_merge_now([{"status", 301}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
+      web_session:flash_merge_now(Session1, [{"status", 301}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
     [{redirect, StatusCode, Url, session, Session1}] ->
-      Session1:flash_merge_now([{"status", StatusCode}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
+      web_session:flash_merge_now(Session1, [{"status", StatusCode}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
     [Session1] ->
       hook_request_path(WebRouter, Session1)
   end.
 
 hook_request_path(WebRouter, Session) ->
-  case web_router:run(WebRouter, request, Session:flash_lookup("path_tokens"), [Session]) of
+  case web_router:run(WebRouter, request, web_session:flash_lookup(Session, "path_tokens"), [Session]) of
     [] ->
       do_status(WebRouter, request, 403, Session);
     [{error, Error, session, Session1}] ->
       do_error(WebRouter, request, Error, Session1);
     [{redirect, Url, session, Session1}] ->
-      Session1:flash_merge_now([{"status", 301}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
+      web_session:flash_merge_now(Session1, [{"status", 301}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
     [{redirect, StatusCode, Url, session, Session1}] ->
-      Session1:flash_merge_now([{"status", StatusCode}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
+      web_session:flash_merge_now(Session1, [{"status", StatusCode}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
     [{session, Session1, view_tokens, ViewTokens}] ->
-      Session2 = Session1:flash_merge_now([{"view_tokens", ViewTokens}]),
+      Session2 = web_session:flash_merge_now(Session1, [{"view_tokens", ViewTokens}]),
       hook_views(WebRouter, Session2);
     [Session1] ->
-      Session2 = Session1:flash_merge_now([{"view_tokens", Session1:flash_lookup("path_tokens")}]),
+      Session2 = web_session:flash_merge_now(Session1, [{"view_tokens", web_session:flash_lookup(Session1, "path_tokens")}]),
       hook_views(WebRouter, Session2)
   end.
 
 hook_views(WebRouter, Session) ->
-  ViewTokens = Session:flash_lookup("view_tokens"),
+  ViewTokens = web_session:flash_lookup(Session, "view_tokens"),
 
   Body0 = web_router:run(WebRouter, pre_request_view, global, [Session]),
   Body1 = web_router:run(WebRouter, pre_request_view, ViewTokens, [Session]),
@@ -272,14 +272,14 @@ hook_views(WebRouter, Session) ->
   Body5 = web_router:run(WebRouter, post_request_view, global, [Session]),
 
   RenderedBody = [Body0, Body1, Body2, Body3, Body4, Body5],
-  Session1 = Session:flash_merge_now([{"YieldedContent", RenderedBody}]),
+  Session1 = web_session:flash_merge_now(Session, [{"YieldedContent", RenderedBody}]),
   BodyFinal = case web_router:run(WebRouter, request_layout_view, global, [Session1]) of
                 [] ->
                   RenderedBody;
                 BodyWithLayout ->
                   BodyWithLayout
               end,
-  Session1:flash_merge_now([{"body", BodyFinal}]).
+  web_session:flash_merge_now(Session1, [{"body", BodyFinal}]).
 
 hook_post_request(WebRouter, Session) ->
   Session1 = case web_router:run(WebRouter, post_request, global, [Session]) of
@@ -288,7 +288,7 @@ hook_post_request(WebRouter, Session) ->
                [Response1] ->
                  Response1
              end,
-  case web_router:run(WebRouter, post_request, Session:flash_lookup("path_tokens"), [Session]) of
+  case web_router:run(WebRouter, post_request, web_session:flash_lookup(Session, "path_tokens"), [Session]) of
     [] ->
       Session1;
     [Response2] ->
@@ -297,23 +297,23 @@ hook_post_request(WebRouter, Session) ->
 
 do_error(WebRouter, Hook, Error, Session) ->
   ?ERROR_MSG("~p~nRequest: ~p~nHook: ~p~nError: ~p~n~n", [httpd_util:rfc1123_date(erlang:universaltime()),
-                                                          Session:flash_lookup("request"), Hook, Error]),
+                                                          web_session:flash_lookup(Session, "request"), Hook, Error]),
   case web_router:run(WebRouter, request_error, 500, [Session, Error]) of
     [] ->
-      Session:flash_merge_now([{"status", 500}, {"headers", []}, {"body", <<"500">>}]);
+      web_session:flash_merge_now(Session, [{"status", 500}, {"headers", []}, {"body", <<"500">>}]);
     [Response] ->
       {status, Status, headers, Headers, body, Body} = Response,
-      Session:flash_merge_now([{"status", Status}, {"headers", Headers}, {"body", Body}])
+      web_session:flash_merge_now(Session, [{"status", Status}, {"headers", Headers}, {"body", Body}])
   end.
 
 do_status(WebRouter, Hook, Status, Session) ->
   ?WARNING_MSG("~p~nRequest: ~p~nHook: ~p~nStatus: ~p~n~n", [httpd_util:rfc1123_date(erlang:universaltime()),
-                                                             Session:flash_lookup("request"), Hook, Status]),
+                                                             web_session:flash_lookup(Session, "request"), Hook, Status]),
   case web_router:run(WebRouter, request_error, Status, [Session]) of
     [] ->
-      Session:flash_merge_now([{"status", Status}, {"headers", []}, {"body", list_to_binary(integer_to_list(Status))}]);
+      web_session:flash_merge_now(Session, [{"status", Status}, {"headers", []}, {"body", list_to_binary(integer_to_list(Status))}]);
     [Response] ->
       {status, Status1, headers, Headers, body, Body} = Response,
-      Session:flash_merge_now([{"status", Status1}, {"headers", Headers}, {"body", Body}])
+      web_session:flash_merge_now(Session, [{"status", Status1}, {"headers", Headers}, {"body", Body}])
   end.
 
