@@ -51,6 +51,8 @@ init([Ip, Port, Domain, DocRoot, WebRouter]) ->
   Shutdown = 5000,
   Type = worker,
 
+  Timeout = 120000, % 2 minute session timeout
+
   WebConfig = [{ip, Ip},
                {port, Port},
                {docroot, DocRoot},
@@ -60,7 +62,7 @@ init([Ip, Port, Domain, DocRoot, WebRouter]) ->
   WebStaticRouter = {web_static_router, {web_router, start_link, [WebRouter]},
                       Restart, Shutdown, Type, [web_router]},
 
-  WebSessions = {web_sessions, {web_sessions, start_link, [WebRouter, Domain]},
+  WebSessions = {web_sessions, {web_sessions, start_link, [WebRouter, Domain, Timeout]},
                  Restart, Shutdown, Type, [web_sessions]},
 
   WebStatic = {web_static, {web_static, start_link, [WebConfig]},
