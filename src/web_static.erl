@@ -18,6 +18,8 @@
          terminate/2, code_change/3]).
 
 %% External API
+-export([setup/0]).
+-export([reload_layout/0, reload_pages/0]).
 -export([get_option/1]).
 -export([loop/3]).
 
@@ -108,6 +110,11 @@ loop(WebRouter, Req, _DocRoot) ->
   end.
 
 
+reload_layout() ->
+  gen_server:cast(?SERVER, reload_layout).
+reload_pages() ->
+  gen_server:cast(?SERVER, reload_pages).
+
 %%--------------------------------------------------------------------
 %% Function: get_option(option_name) -> OptionValue | error
 %%--------------------------------------------------------------------
@@ -117,6 +124,14 @@ get_option(web_router) ->
   gen_server:call(?SERVER, get_web_router_name);
 get_option(_Other) ->
   error.
+
+setup() ->
+  application:start(web_pages),
+  application:start(web_layout),
+  application:start(adv_crypto),
+  application:start(inets),
+  application:start(mochiweb),
+  application:start(web_static).
 
 
 %%====================================================================
@@ -135,8 +150,8 @@ init([Options]) ->
   {DocRoot, Options1} = get_option(docroot, Options),
   {WebRouter, Options2} = get_option(web_router, Options1),
 
-  web_pages:load_pages(WebRouter, code:priv_dir(?SERVER) ++ "/pages"),
-  web_layout:register_layout(default, WebRouter, code:priv_dir(?SERVER) ++ "/layout/static.herml"),
+  reload_layout(WebRouter),
+  reload_pages(WebRouter),
 
   {A1, A2, A3} = now(),
   random:seed(A1, A2, A3),
@@ -167,6 +182,12 @@ handle_call(_Request, _From, State) ->
 %%                                      {stop, Reason, State}
 %% Description: Handling cast messages
 %%--------------------------------------------------------------------
+handle_cast(reload_layout, #state{router=WebRouter} = State) ->
+  reload_layout(WebRouter),
+  {noreply, State};
+handle_cast(reload_pages, #state{router=WebRouter} = State) ->
+  reload_pages(WebRouter),
+  {noreply, State};
 handle_cast(_Msg, State) ->
   {noreply, State}.
 
@@ -204,6 +225,12 @@ code_change(_OldVsn, State, _Extra) ->
 get_option(Option, Options) ->
   {proplists:get_value(Option, Options), proplists:delete(Option, Options)}.
 
+reload_layout(WebRouter) ->
+  web_layout:register_layout(default, WebRouter, code:priv_dir(?SERVER) ++ "/layout/static.herml").
+
+reload_pages(WebRouter) ->
+  web_pages:load_pages(WebRouter, code:priv_dir(?SERVER) ++ "/pages").
+
 
 do_request(WebRouter, Method, PathTokens, Req) ->
   Session = hook_pre_request(WebRouter, Method, PathTokens, Req),
@@ -214,7 +241,7 @@ hook_pre_request(WebRouter, Method, PathTokens, Req) ->
   [Session] = web_router:run(WebRouter, pre_request, global,
                              [[{"method", Method}, {"path_tokens", PathTokens}, {"request", Req}]]),
 
-  case web_router:run(WebRouter, pre_request, PathTokens, [Session]) of
+  case web_router:run(WebRouter, pre_request, web_session:flash_lookup(Session, "first_path_token"), [Session]) of
     [{error, Error, session, Session1}] ->
       do_error(WebRouter, pre_request, Error, Session1);
     [{redirect, Url, session, Session1}] ->
@@ -242,7 +269,7 @@ hook_request_global(WebRouter, Session) ->
   end.
 
 hook_request_path(WebRouter, Session) ->
-  case web_router:run(WebRouter, request, web_session:flash_lookup(Session, "path_tokens"), [Session]) of
+  case web_router:run(WebRouter, request, web_session:flash_lookup(Session, "first_path_token"), [Session]) of
     [] ->
       do_status(WebRouter, request, 403, Session);
     [{error, Error, session, Session1}] ->
@@ -288,7 +315,7 @@ hook_post_request(WebRouter, Session) ->
                [Response1] ->
                  Response1
              end,
-  case web_router:run(WebRouter, post_request, web_session:flash_lookup(Session, "path_tokens"), [Session]) of
+  case web_router:run(WebRouter, post_request, web_session:flash_lookup(Session, "first_path_token"), [Session]) of
     [] ->
       Session1;
     [Response2] ->
