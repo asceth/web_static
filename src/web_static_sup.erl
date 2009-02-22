@@ -40,7 +40,7 @@ start_link([Ip, Port, Domain, DocRoot, WebRouter]) ->
 %% to find out about restart strategy, maximum restart frequency and child
 %% specifications.
 %%--------------------------------------------------------------------
-init([Ip, Port, Domain, DocRoot, WebRouter]) ->
+init([Ip, Port, Domain, DocRoot, Exchange]) ->
   RestartStrategy = one_for_one,
   MaxRestarts = 10,
   MaxSecondsBetweenRestarts = 5,
@@ -56,19 +56,16 @@ init([Ip, Port, Domain, DocRoot, WebRouter]) ->
   WebConfig = [{ip, Ip},
                {port, Port},
                {docroot, DocRoot},
-               {web_router, WebRouter}],
+               {web_exchange, Exchange}],
 
 
-  WebStaticRouter = {web_static_router, {web_router, start_link, [WebRouter]},
-                      Restart, Shutdown, Type, [web_router]},
-
-  WebSessions = {web_sessions, {web_sessions, start_link, [WebRouter, Domain, Timeout]},
+  WebSessions = {web_sessions, {web_sessions, start_link, [Exchange, Domain, Timeout]},
                  Restart, Shutdown, Type, [web_sessions]},
 
   WebStatic = {web_static, {web_static, start_link, [WebConfig]},
                 Restart, Shutdown, Type, [web_static]},
 
-  {ok, {SupFlags, [WebStaticRouter, WebSessions, WebStatic]}}.
+  {ok, {SupFlags, [WebSessions, WebStatic]}}.
 
 %%====================================================================
 %% Internal functions

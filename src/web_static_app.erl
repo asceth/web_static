@@ -44,11 +44,11 @@ start(_Type, _StartArgs) ->
               AnyDocRoot ->
                 AnyDocRoot
             end,
-  WebRouter = case os:getenv("STATIC_ROUTER") of
-                false ->
-                  web_static_router;
-                AnyWebRouter ->
-                  AnyWebRouter
+  Exchange = case os:getenv("STATIC_EXCHANGE") of
+               false ->
+                 web_static_exchange;
+               AnyExchange ->
+                 AnyExchange
               end,
   Domain = case os:getenv("STATIC_DOMAIN") of
              false ->
@@ -57,7 +57,7 @@ start(_Type, _StartArgs) ->
                AnyDomain
            end,
 
-  case web_static_sup:start_link([Ip, Port, Domain, DocRoot, WebRouter]) of
+  case web_static_sup:start_link([Ip, Port, Domain, DocRoot, Exchange]) of
     {ok, Pid} ->
       {ok, Pid};
     Error ->

@@ -7,6 +7,6 @@
               web_static_sup,
               web_static]},
    {registered, [web_static_sup]},
-   {applications, [kernel, stdlib, mochiweb, web_pages, web_layout]},
+   {applications, [kernel, stdlib, mochiweb, web_router, web_pages, web_layout]},
    {mod, {web_static_app, []}},
    {start_phases, []}]}.

@@ -23,7 +23,8 @@
 -export([get_option/1]).
 -export([loop/3]).
 
--record(state, {router}).
+-record(state, {web_exchange,
+                web_exchange_name}).
 
 -include("logger.hrl").
 
@@ -121,16 +122,17 @@ reload_pages() ->
 get_option(database_pool) ->
   gen_server:call(?SERVER, get_database_pool);
 get_option(web_router) ->
-  gen_server:call(?SERVER, get_web_router_name);
+  gen_server:call(?SERVER, get_web_exchange_name);
 get_option(_Other) ->
   error.
 
 setup() ->
-  application:start(web_pages),
-  application:start(web_layout),
-  application:start(adv_crypto),
   application:start(inets),
   application:start(mochiweb),
+  application:start(mnesia),
+  application:start(web_router),
+  application:start(web_pages),
+  application:start(web_layout),
   application:start(web_static).
 
 
@@ -148,18 +150,19 @@ setup() ->
 %%--------------------------------------------------------------------
 init([Options]) ->
   {DocRoot, Options1} = get_option(docroot, Options),
-  {WebRouter, Options2} = get_option(web_router, Options1),
+  {WebExchange, Options2} = get_option(web_exchange, Options1),
 
-  reload_layout(WebRouter),
-  reload_pages(WebRouter),
+  WebExchangeRecord = web_router_exchange:declare(WebExchange, topic, true, false),
+  reload_layout(WebExchange),
+  reload_pages(WebExchange),
 
   {A1, A2, A3} = now(),
   random:seed(A1, A2, A3),
   Loop = fun(Req) ->
-             ?SERVER:loop(WebRouter, Req, DocRoot)
+             ?SERVER:loop(WebExchangeRecord, Req, DocRoot)
          end,
   mochiweb_http:start([{name, ?HTTPSERVER}, {loop, Loop} | Options2]),
-  {ok, #state{router=WebRouter}}.
+  {ok, #state{web_exchange=WebExchangeRecord, web_exchange_name=WebExchange}}.
 
 %%--------------------------------------------------------------------
 %% Function: %% handle_call(Request, From, State) -> {reply, Reply, State} |
@@ -170,8 +173,8 @@ init([Options]) ->
 %%                                      {stop, Reason, State}
 %% Description: Handling call messages
 %%--------------------------------------------------------------------
-handle_call(get_web_router_name, _From, #state{router=WebRouter} = State) ->
-  {reply, WebRouter, State};
+handle_call(get_web_exchange_name, _From, #state{web_exchange_name=WebExchangeName} = State) ->
+  {reply, WebExchangeName, State};
 handle_call(_Request, _From, State) ->
   Reply = ok,
   {reply, Reply, State}.
@@ -182,11 +185,11 @@ handle_call(_Request, _From, State) ->
 %%                                      {stop, Reason, State}
 %% Description: Handling cast messages
 %%--------------------------------------------------------------------
-handle_cast(reload_layout, #state{router=WebRouter} = State) ->
-  reload_layout(WebRouter),
+handle_cast(reload_layout, #state{web_exchange_name=WebExchangeName} = State) ->
+  reload_layout(WebExchangeName),
   {noreply, State};
-handle_cast(reload_pages, #state{router=WebRouter} = State) ->
-  reload_pages(WebRouter),
+handle_cast(reload_pages, #state{web_exchange_name=WebExchangeName} = State) ->
+  reload_pages(WebExchangeName),
   {noreply, State};
 handle_cast(_Msg, State) ->
   {noreply, State}.
@@ -207,8 +210,9 @@ handle_info(_Info, State) ->
 %% cleaning up. When it returns, the gen_server terminates with Reason.
 %% The return value is ignored.
 %%--------------------------------------------------------------------
-terminate(_Reason, #state{router=_WebRouter} = _State) ->
+terminate(_Reason, #state{web_exchange_name=WebExchangeName} = _State) ->
   mochiweb_http:stop(?SERVER),
+  web_router_exchange:delete(WebExchangeName, false),
   ok.
 
 %%--------------------------------------------------------------------
@@ -225,82 +229,87 @@ code_change(_OldVsn, State, _Extra) ->
 get_option(Option, Options) ->
   {proplists:get_value(Option, Options), proplists:delete(Option, Options)}.
 
-reload_layout(WebRouter) ->
-  web_layout:register_layout(default, WebRouter, code:priv_dir(?SERVER) ++ "/layout/static.herml").
+reload_layout(WebExchangeName) ->
+  web_layout:register_layout(default, WebExchangeName, code:priv_dir(?SERVER) ++ "/layout/static.herml").
 
-reload_pages(WebRouter) ->
-  web_pages:load_pages(WebRouter, code:priv_dir(?SERVER) ++ "/pages").
+reload_pages(WebExchangeName) ->
+  web_pages:load_pages(WebExchangeName, code:priv_dir(?SERVER) ++ "/pages").
 
 
-do_request(WebRouter, Method, PathTokens, Req) ->
-  Session = hook_pre_request(WebRouter, Method, PathTokens, Req),
-  SessionFinal = hook_post_request(WebRouter, Session),
+do_request(WebExchange, Method, PathTokens, Req) ->
+  Session = hook_pre_request(WebExchange, Method, PathTokens, Req),
+  SessionFinal = hook_post_request(WebExchange, Session),
   {status, web_session:flash_lookup(SessionFinal, "status"), headers, web_session:flash_lookup(SessionFinal, "headers"), body, web_session:flash_lookup(SessionFinal, "body")}.
 
-hook_pre_request(WebRouter, Method, PathTokens, Req) ->
-  [Session] = web_router:run(WebRouter, pre_request, global,
-                             [[{"method", Method}, {"path_tokens", PathTokens}, {"request", Req}]]),
+hook_pre_request(WebExchange, Method, PathTokens, Req) ->
+  GlobalRoutingKey = web_router:key([Method, pre_request, global]),
+  [Session] = web_router_exchange:route(WebExchange, GlobalRoutingKey,
+                                        [[{"method", Method}, {"path_tokens", PathTokens}, {"request", Req}]]),
 
-  case web_router:run(WebRouter, pre_request, web_session:flash_lookup(Session, "first_path_token"), [Session]) of
+  PathRoutingKey = web_router:key([Method, pre_request|web_session:flash_lookup(Session, "path_tokens")]),
+  case web_router_exchange:route(WebExchange, PathRoutingKey, [Session]) of
     [{error, Error, session, Session1}] ->
-      do_error(WebRouter, pre_request, Error, Session1);
+      do_error(WebExchange, pre_request, Error, Session1);
     [{redirect, Url, session, Session1}] ->
       web_session:flash_merge_now(Session1, [{"status", 301}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
     [{redirect, StatusCode, Url, session, Session1}] ->
       web_session:flash_merge_now(Session1, [{"status", StatusCode}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
     [{ok, Session1}] ->
-      hook_request_global(WebRouter, Session1);
+      hook_request_global(WebExchange, Session1);
     [] ->
-      hook_request_global(WebRouter, Session)
+      hook_request_global(WebExchange, Session)
   end.
 
-hook_request_global(WebRouter, Session) ->
-  case web_router:run(WebRouter, request, global, [Session]) of
+hook_request_global(WebExchange, Session) ->
+  GlobalRoutingKey = web_router:key([web_session:flash_lookup(Session, "method"), request, global]),
+  case web_router_exchange:route(WebExchange, GlobalRoutingKey, [Session]) of
     [] ->
-      hook_request_path(WebRouter, Session);
+      hook_request_path(WebExchange, Session);
     [{error, Error, session, Session1}] ->
-      do_error(WebRouter, request, Error, Session1);
+      do_error(WebExchange, request, Error, Session1);
     [{redirect, Url, session, Session1}] ->
       web_session:flash_merge_now(Session1, [{"status", 301}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
     [{redirect, StatusCode, Url, session, Session1}] ->
       web_session:flash_merge_now(Session1, [{"status", StatusCode}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
     [Session1] ->
-      hook_request_path(WebRouter, Session1)
+      hook_request_path(WebExchange, Session1)
   end.
 
-hook_request_path(WebRouter, Session) ->
-  case web_router:run(WebRouter, request, web_session:flash_lookup(Session, "first_path_token"), [Session]) of
+hook_request_path(WebExchange, Session) ->
+  PathRoutingKey = web_router:key([web_session:flash_lookup(Session, "method"), request|web_session:flash_lookup(Session, "path_tokens")]),
+  case web_router_exchange:route(WebExchange, PathRoutingKey, [Session]) of
     [] ->
-      do_status(WebRouter, request, 403, Session);
+      do_status(WebExchange, request, 403, Session);
     [{error, Error, session, Session1}] ->
-      do_error(WebRouter, request, Error, Session1);
+      do_error(WebExchange, request, Error, Session1);
     [{redirect, Url, session, Session1}] ->
       web_session:flash_merge_now(Session1, [{"status", 301}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
     [{redirect, StatusCode, Url, session, Session1}] ->
       web_session:flash_merge_now(Session1, [{"status", StatusCode}, {"headers", [{"Location", Url}]}, {"body", <<>>}]);
     [{session, Session1, view_tokens, ViewTokens}] ->
       Session2 = web_session:flash_merge_now(Session1, [{"view_tokens", ViewTokens}]),
-      hook_views(WebRouter, Session2);
+      hook_views(WebExchange, Session2);
     [Session1] ->
       Session2 = web_session:flash_merge_now(Session1, [{"view_tokens", web_session:flash_lookup(Session1, "path_tokens")}]),
-      hook_views(WebRouter, Session2)
+      hook_views(WebExchange, Session2)
   end.
 
-hook_views(WebRouter, Session) ->
+hook_views(WebExchange, Session) ->
+  Method = web_session:flash_lookup(Session, "method"),
   ViewTokens = web_session:flash_lookup(Session, "view_tokens"),
 
-  Body0 = web_router:run(WebRouter, pre_request_view, global, [Session]),
-  Body1 = web_router:run(WebRouter, pre_request_view, ViewTokens, [Session]),
+  Body0 = web_router_exchange:route(WebExchange, web_router:key([Method, pre_request_view, global]), [Session]),
+  Body1 = web_router_exchange:route(WebExchange, web_router:key([Method, pre_request_view, ViewTokens]), [Session]),
 
-  Body2 = web_router:run(WebRouter, request_view, global, [Session]),
-  Body3 = web_router:run(WebRouter, request_view, ViewTokens, [Session]),
+  Body2 = web_router_exchange:route(WebExchange, web_router:key([Method, request_view, global]), [Session]),
+  Body3 = web_router_exchange:route(WebExchange, web_router:key([Method, request_view, ViewTokens]), [Session]),
 
-  Body4 = web_router:run(WebRouter, post_request_view, ViewTokens, [Session]),
-  Body5 = web_router:run(WebRouter, post_request_view, global, [Session]),
+  Body4 = web_router_exchange:route(WebExchange, web_router:key([Method, post_request_view, ViewTokens]), [Session]),
+  Body5 = web_router_exchange:route(WebExchange, web_router:key([Method, post_request_view, global]), [Session]),
 
   RenderedBody = [Body0, Body1, Body2, Body3, Body4, Body5],
   Session1 = web_session:flash_merge_now(Session, [{"YieldedContent", RenderedBody}]),
-  BodyFinal = case web_router:run(WebRouter, request_layout_view, global, [Session1]) of
+  BodyFinal = case web_router_exchange:route(WebExchange, web_router:key([Method, request_layout_view, global]), [Session1]) of
                 [] ->
                   RenderedBody;
                 BodyWithLayout ->
@@ -308,24 +317,26 @@ hook_views(WebRouter, Session) ->
               end,
   web_session:flash_merge_now(Session1, [{"body", BodyFinal}]).
 
-hook_post_request(WebRouter, Session) ->
-  Session1 = case web_router:run(WebRouter, post_request, global, [Session]) of
+hook_post_request(WebExchange, Session) ->
+  Method = web_session:flash_lookup(Session, "method"),
+  Session1 = case web_router_exchange:route(WebExchange, web_router:key([Method, post_request, global]), [Session]) of
                [] ->
                  Session;
                [Response1] ->
                  Response1
              end,
-  case web_router:run(WebRouter, post_request, web_session:flash_lookup(Session, "first_path_token"), [Session]) of
+  RoutingKey = web_router:key([Method, post_request|web_session:flash_lookup(Session, "path_tokens")]),
+  case web_router_exchange:route(WebExchange, RoutingKey, [Session]) of
     [] ->
       Session1;
     [Response2] ->
       Response2
   end.
 
-do_error(WebRouter, Hook, Error, Session) ->
+do_error(WebExchange, Hook, Error, Session) ->
   ?ERROR_MSG("~p~nRequest: ~p~nHook: ~p~nError: ~p~n~n", [httpd_util:rfc1123_date(erlang:universaltime()),
                                                           web_session:flash_lookup(Session, "request"), Hook, Error]),
-  case web_router:run(WebRouter, request_error, 500, [Session, Error]) of
+  case web_router_exchange:route(WebExchange, web_router:key([request_error, 500]), [Session, Error]) of
     [] ->
       web_session:flash_merge_now(Session, [{"status", 500}, {"headers", []}, {"body", <<"500">>}]);
     [Response] ->
@@ -333,10 +344,10 @@ do_error(WebRouter, Hook, Error, Session) ->
       web_session:flash_merge_now(Session, [{"status", Status}, {"headers", Headers}, {"body", Body}])
   end.
 
-do_status(WebRouter, Hook, Status, Session) ->
+do_status(WebExchange, Hook, Status, Session) ->
   ?WARNING_MSG("~p~nRequest: ~p~nHook: ~p~nStatus: ~p~n~n", [httpd_util:rfc1123_date(erlang:universaltime()),
                                                              web_session:flash_lookup(Session, "request"), Hook, Status]),
-  case web_router:run(WebRouter, request_error, Status, [Session]) of
+  case web_router_exchange:route(WebExchange, web_router:key([request_error, Status]), [Session]) of
     [] ->
       web_session:flash_merge_now(Session, [{"status", Status}, {"headers", []}, {"body", list_to_binary(integer_to_list(Status))}]);
     [Response] ->
