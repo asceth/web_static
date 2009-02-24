@@ -50,7 +50,7 @@ start_link(Options) ->
 %% Function: loop(Req, DocRoot) -> void()
 %% Description: Loop for the mochiweb http server
 %%--------------------------------------------------------------------
-loop(WebRouter, Req, _DocRoot) ->
+loop(WebExchange, Req, _DocRoot) ->
   statistics(wall_clock),
   Path = Req:get(path),
   PathTokens = string:tokens(Path, "/"),
@@ -80,20 +80,19 @@ loop(WebRouter, Req, _DocRoot) ->
     error ->
       Req:respond({501, [], []});
     RouteMethod ->
-      Response = try do_request(WebRouter, Method, PathTokens, Req)
+      Response = try do_request(WebExchange, Method, PathTokens, Req)
                  catch
-                   throw:{route_error, StatusCode, Data} ->
-                     [RouteErrorResponse] = web_router:run(WebRouter, request_error,
-                                                           StatusCode, [RouteMethod, PathTokens, Req, Data]),
+                   throw:{route_error, StatusCode, _Data} ->
+                     ?ERROR_MSG("~p~nError: ~p~nTrace: ~p~n~n", [httpd_util:rfc1123_date(erlang:universaltime()), route_error, erlang:get_stacktrace()]),
+                     [RouteErrorResponse] = do_status(WebExchange, request_error, StatusCode, []),
                      RouteErrorResponse;
                    error:function_clause ->
-                     [FunctionClauseResponse] = web_router:run(WebRouter, request_error,
-                                                               403, [RouteMethod, PathTokens, Req, []]),
+                     ?ERROR_MSG("~p~nError: ~p~nTrace: ~p~n~n", [httpd_util:rfc1123_date(erlang:universaltime()), function_clause, erlang:get_stacktrace()]),
+                     [FunctionClauseResponse] = do_status(WebExchange, request_error, 403, []),
                      FunctionClauseResponse;
                    error:Error ->
                      ?ERROR_MSG("~p~nError: ~p~nTrace: ~p~n~n", [httpd_util:rfc1123_date(erlang:universaltime()), Error, erlang:get_stacktrace()]),
-                     [ErrorResponse] = web_router:run(WebRouter, request_error,
-                                                      500, [RouteMethod, PathTokens, Req, []]),
+                     [ErrorResponse] = do_status(WebExchange, request_error, 500, []),
                      ErrorResponse
                  end,
       {_, Time1} = statistics(wall_clock),
@@ -344,6 +343,15 @@ do_error(WebExchange, Hook, Error, Session) ->
       web_session:flash_merge_now(Session, [{"status", Status}, {"headers", Headers}, {"body", Body}])
   end.
 
+do_status(WebExchange, Hook, Status, []) ->
+  ?WARNING_MSG("~p~nHook: ~p~nStatus: ~p~n~n", [httpd_util:rfc1123_date(erlang:universaltime()),
+                                                Hook, Status]),
+  case web_router_exchange:route(WebExchange, web_router:key([request_error, Status]), [undefined]) of
+    [] ->
+      {status, Status, headers, [], body, list_to_binary(integer_to_list(Status))};
+    [Response] ->
+      Response
+  end;
 do_status(WebExchange, Hook, Status, Session) ->
   ?WARNING_MSG("~p~nRequest: ~p~nHook: ~p~nStatus: ~p~n~n", [httpd_util:rfc1123_date(erlang:universaltime()),
                                                              web_session:flash_lookup(Session, "request"), Hook, Status]),
